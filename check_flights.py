@@ -25,6 +25,25 @@ MAX_STOPS     = 1             # max 1 stop each way
 # ──────────────────────────────────────────────────────────────────────────────
 
 
+def fmt_dur(minutes):
+    h = minutes // 60
+    m = minutes % 60
+    return f"{h}h {m}m" if m else f"{h}h"
+
+
+def fmt_dt(dt_str):
+    try:
+        return datetime.fromisoformat(dt_str).strftime("%d %b %H:%M")
+    except Exception:
+        return dt_str
+
+
+def stops_label(n):
+    if n == 0:
+        return "Direct ✅"
+    return f"{n} stop{'s' if n > 1 else ''}"
+
+
 def search_outbound():
     """Step 1: Search outbound flights CPH → ICN."""
     params = {
@@ -49,19 +68,19 @@ def search_outbound():
 def search_return(departure_token):
     """Step 2: Search return flights ICN → CPH using departure_token."""
     params = {
-        "engine":           "google_flights",
-        "departure_id":     ORIGIN,
-        "arrival_id":       DESTINATION,
-        "outbound_date":    DEPART_DATE,
-        "return_date":      RETURN_DATE,
-        "adults":           ADULTS,
-        "type":             "1",
-        "travel_class":     "1",
-        "stops":            "2",    # 2 = max 1 stop
-        "currency":         CURRENCY,
-        "hl":               "en",
-        "departure_token":  departure_token,
-        "api_key":          SERPAPI_KEY,
+        "engine":          "google_flights",
+        "departure_id":    ORIGIN,
+        "arrival_id":      DESTINATION,
+        "outbound_date":   DEPART_DATE,
+        "return_date":     RETURN_DATE,
+        "adults":          ADULTS,
+        "type":            "1",
+        "travel_class":    "1",
+        "stops":           "2",    # 2 = max 1 stop
+        "currency":        CURRENCY,
+        "hl":              "en",
+        "departure_token": departure_token,
+        "api_key":         SERPAPI_KEY,
     }
     resp = requests.get("https://serpapi.com/search", params=params)
     resp.raise_for_status()
@@ -69,13 +88,30 @@ def search_return(departure_token):
 
 
 def extract_legs(flight_entry):
-    """Extract dep/arr times, stops, duration and airlines from a flight entry."""
+    """Extract dep/arr times, stops, layovers, duration and airlines."""
     legs     = flight_entry.get("flights", [])
     dep      = legs[0]["departure_airport"]["time"] if legs else "N/A"
     arr      = legs[-1]["arrival_airport"]["time"]  if legs else "N/A"
     stops    = len(legs) - 1
     duration = flight_entry.get("total_duration", 0)
     airlines = list(dict.fromkeys(l["airline"] for l in legs))
+
+    # Layover airports — the arrival airport of each leg except the last
+    layovers_raw = flight_entry.get("layovers", [])
+    layover_strs = []
+    for i, leg in enumerate(legs[:-1]):
+        airport_code = leg["arrival_airport"].get("id", "")
+        airport_name = leg["arrival_airport"].get("name", "")
+        # Match with layover duration if available
+        if i < len(layovers_raw):
+            lay_min = layovers_raw[i].get("duration", 0)
+            lay_str = f"{fmt_dur(lay_min)}" if lay_min else ""
+        else:
+            lay_str = ""
+        if lay_str:
+            layover_strs.append(f"{airport_code} ({airport_name}) — {lay_str} layover")
+        else:
+            layover_strs.append(f"{airport_code} ({airport_name})")
 
     bag_info = []
     for leg in legs:
@@ -88,6 +124,7 @@ def extract_legs(flight_entry):
         "dep":      dep,
         "arr":      arr,
         "stops":    stops,
+        "layovers": layover_strs,
         "duration": duration,
         "airlines": ", ".join(airlines),
         "bags":     bags,
@@ -95,10 +132,7 @@ def extract_legs(flight_entry):
 
 
 def parse_outbound(data):
-    """
-    Return list of (outbound_info, departure_token, price, price_insights).
-    Only includes flights with <= MAX_STOPS stops.
-    """
+    """Return list of (outbound_info, departure_token, price) + price_insights."""
     results        = []
     price_insights = data.get("price_insights", {})
 
@@ -113,13 +147,12 @@ def parse_outbound(data):
         price = flight.get("price", 0)
         results.append((out, token, price))
 
-    # Sort by price, take top 5 (each needs a separate return API call)
     results.sort(key=lambda x: x[2])
     return results[:5], price_insights
 
 
 def parse_return(data):
-    """Return list of return flight options with <= MAX_STOPS stops."""
+    """Return list of (return_info, total_price) with <= MAX_STOPS stops."""
     results = []
     for flight in data.get("best_flights", []) + data.get("other_flights", []):
         legs = flight.get("flights", [])
@@ -129,35 +162,18 @@ def parse_return(data):
         price = flight.get("price", 0)
         results.append((ret, price))
     results.sort(key=lambda x: x[1])
-    return results[:3]   # top 3 return options per outbound
+    return results[:3]
 
 
-def fmt_dur(minutes):
-    h = minutes // 60
-    m = minutes % 60
-    return f"{h}h {m}m" if m else f"{h}h"
-
-
-def fmt_dt(dt_str):
-    try:
-        return datetime.fromisoformat(dt_str).strftime("%d %b %H:%M")
-    except Exception:
-        return dt_str
-
-
-def stops_label(n):
-    if n == 0:
-        return "Direct ✅"
-    return f"{n} stop{'s' if n > 1 else ''}"
+def layover_line(layovers, plain=True):
+    """Format layover list as a string."""
+    if not layovers:
+        return ""
+    prefix = "via " if plain else "🔁 via "
+    return prefix + " → ".join(layovers)
 
 
 def build_email(combos, price_insights):
-    """
-    combos = list of dicts with keys:
-      out_airlines, out_dep, out_arr, out_stops, out_dur, out_bags,
-      ret_airlines, ret_dep, ret_arr, ret_stops, ret_dur, ret_bags,
-      total_price
-    """
     today   = datetime.now().strftime("%d %b %Y")
     subject = f"✈️ CPH ⟶ ICN Flights — {today} — {ADULTS} adults, max 1 stop"
 
@@ -169,7 +185,6 @@ def build_email(combos, price_insights):
     price_level = price_insights.get("price_level", "").replace("_", " ").title()
     typ_low     = price_insights.get("typical_price_range", [None, None])[0]
     typ_high    = price_insights.get("typical_price_range", [None, None])[1]
-
     level_color = {"Low": "#1a6e3c", "Typical": "#b8860b", "High": "#c0392b"}.get(price_level, "#555")
 
     # ── Plain text ──────────────────────────────────────────────────────────
@@ -184,21 +199,28 @@ def build_email(combos, price_insights):
     lines += [
         "─" * 65,
         f"  CHEAPEST: {cheapest['total_price']} {CURRENCY}",
-        f"  OUT: {cheapest['out_airlines']}  RET: {cheapest['ret_airlines']}",
         "─" * 65, "",
     ]
     for i, c in enumerate(combos, 1):
+        out_via = layover_line(c["out_layovers"]) 
+        ret_via = layover_line(c["ret_layovers"])
         lines += [
             f"#{i}  Total: {c['total_price']} {CURRENCY}",
             f"    ✈ OUT  {c['out_airlines']}",
             f"         {fmt_dt(c['out_dep'])} → {fmt_dt(c['out_arr'])}  "
             f"({stops_label(c['out_stops'])}, {fmt_dur(c['out_dur'])})",
+        ]
+        if out_via:
+            lines.append(f"         {out_via}")
+        lines += [
             f"         Bags: {c['out_bags']}",
             f"    ✈ RET  {c['ret_airlines']}",
             f"         {fmt_dt(c['ret_dep'])} → {fmt_dt(c['ret_arr'])}  "
             f"({stops_label(c['ret_stops'])}, {fmt_dur(c['ret_dur'])})",
-            f"         Bags: {c['ret_bags']}", "",
         ]
+        if ret_via:
+            lines.append(f"         {ret_via}")
+        lines += [f"         Bags: {c['ret_bags']}", ""]
     body_text = "\n".join(lines)
 
     # ── HTML rows ───────────────────────────────────────────────────────────
@@ -206,6 +228,16 @@ def build_email(combos, price_insights):
     for i, c in enumerate(combos, 1):
         bg   = "#eef7ee" if i == 1 else ("#ffffff" if i % 2 == 0 else "#f9f9f9")
         bold = "font-weight:bold;" if i == 1 else ""
+
+        out_via_html = (
+            f'<br><small style="color:#888">🔁 via {" → ".join(c["out_layovers"])}</small>'
+            if c["out_layovers"] else ""
+        )
+        ret_via_html = (
+            f'<br><small style="color:#888">🔁 via {" → ".join(c["ret_layovers"])}</small>'
+            if c["ret_layovers"] else ""
+        )
+
         rows += f"""
         <tr style="background:{bg}">
           <td style="padding:10px;{bold}">{i}</td>
@@ -215,13 +247,15 @@ def build_email(combos, price_insights):
           <td style="padding:10px">
             <strong>🛫 {c['out_airlines']}</strong><br>
             {fmt_dt(c['out_dep'])} → {fmt_dt(c['out_arr'])}<br>
-            <small>{stops_label(c['out_stops'])} · {fmt_dur(c['out_dur'])}</small><br>
+            <small>{stops_label(c['out_stops'])} · {fmt_dur(c['out_dur'])}</small>
+            {out_via_html}<br>
             <small style="color:#666">🧳 {c['out_bags']}</small>
           </td>
           <td style="padding:10px">
             <strong>🛬 {c['ret_airlines']}</strong><br>
             {fmt_dt(c['ret_dep'])} → {fmt_dt(c['ret_arr'])}<br>
-            <small>{stops_label(c['ret_stops'])} · {fmt_dur(c['ret_dur'])}</small><br>
+            <small>{stops_label(c['ret_stops'])} · {fmt_dur(c['ret_dur'])}</small>
+            {ret_via_html}<br>
             <small style="color:#666">🧳 {c['ret_bags']}</small>
           </td>
         </tr>"""
@@ -266,9 +300,8 @@ def build_email(combos, price_insights):
         <tbody>{rows}</tbody>
       </table>
       <p style="color:#999;font-size:12px;margin-top:16px">
-        ⚠️ Prices from Google Flights via SerpApi. Prices shown are estimates for the
-        outbound leg — total round-trip price may differ. Always verify on the airline
-        or booking site before purchasing.
+        ⚠️ Prices from Google Flights via SerpApi. Always verify on the airline
+        or booking site before purchasing. Baggage allowance may vary.
       </p>
     </body></html>"""
 
@@ -291,7 +324,7 @@ def send_email(subject, body_text, body_html):
 
 
 def main():
-    print(f"🔍 Step 1: Searching outbound flights {ORIGIN} → {DESTINATION} "
+    print(f"🔍 Step 1: Searching outbound {ORIGIN} → {DESTINATION} "
           f"({DEPART_DATE}), max {MAX_STOPS} stop(s)...")
 
     out_data, price_insights = parse_outbound(search_outbound())
@@ -299,33 +332,34 @@ def main():
 
     combos = []
     for idx, (out, token, out_price) in enumerate(out_data, 1):
-        print(f"   Step 2.{idx}: Fetching return flights for outbound option #{idx}...")
+        print(f"   Step 2.{idx}: Fetching return flights for outbound #{idx}...")
         try:
             ret_data    = search_return(token)
             ret_options = parse_return(ret_data)
             if ret_options:
-                # Pick cheapest return for this outbound
                 ret, ret_price = ret_options[0]
                 combos.append({
                     "out_airlines": out["airlines"],
                     "out_dep":      out["dep"],
                     "out_arr":      out["arr"],
                     "out_stops":    out["stops"],
+                    "out_layovers": out["layovers"],
                     "out_dur":      out["duration"],
                     "out_bags":     out["bags"],
                     "ret_airlines": ret["airlines"],
                     "ret_dep":      ret["dep"],
                     "ret_arr":      ret["arr"],
                     "ret_stops":    ret["stops"],
+                    "ret_layovers": ret["layovers"],
                     "ret_dur":      ret["duration"],
                     "ret_bags":     ret["bags"],
-                    "total_price":  ret_price,  # SerpApi returns combined price in return search
+                    "total_price":  ret_price,
                 })
         except Exception as e:
             print(f"   Warning: could not fetch return for option #{idx}: {e}")
 
     combos.sort(key=lambda x: x["total_price"])
-    print(f"   Built {len(combos)} complete outbound+return combinations")
+    print(f"   Built {len(combos)} complete combinations")
     if combos:
         print(f"   Cheapest: {combos[0]['total_price']} {CURRENCY}")
 
