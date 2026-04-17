@@ -2,13 +2,14 @@ name: Daily Flight Price Check
 
 on:
   schedule:
-    # Runs every day at 05:00 UTC (05:00 CET / 06:00 CEST)
-    - cron: "0 5 * * *"
-  workflow_dispatch:  # Allow manual trigger from GitHub UI
+    - cron: "0 5 * * *"   # 05:00 UTC = 06:00 CET / 07:00 CEST
+  workflow_dispatch:        # Allow manual trigger from GitHub UI
 
 jobs:
   check-flights:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write       # needed to commit price_history.json back to repo
 
     steps:
       - name: Checkout repository
@@ -31,3 +32,11 @@ jobs:
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
           EMAIL_TO:      ${{ secrets.EMAIL_TO }}
         run: python check_flights.py
+
+      - name: Save price history to repo
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add price_history.json || true
+          git diff --cached --quiet || git commit -m "Update price history $(date +'%Y-%m-%d')"
+          git push || true
