@@ -2,8 +2,8 @@ name: Daily Flight Price Check
 
 on:
   schedule:
-    # Runs every day at 08:00 UTC (09:00 CET / 10:00 CEST)
-    - cron: "0 8 * * *"
+    # Runs every day at 05:00 UTC (05:00 CET / 06:00 CEST)
+    - cron: "0 5 * * *"
   workflow_dispatch:  # Allow manual trigger from GitHub UI
 
 jobs:
