@@ -17,8 +17,8 @@ EMAIL_TO      = os.environ["EMAIL_TO"]
 # Search parameters
 ORIGIN        = "CPH"         # Copenhagen
 DESTINATION   = "ICN"         # Seoul Incheon
-DEPART_DATE   = "2025-10-27"
-RETURN_DATE   = "2025-11-01"
+DEPART_DATE   = "2026-10-27"
+RETURN_DATE   = "2026-11-01"
 ADULTS        = 2
 CURRENCY      = "SEK"
 # ──────────────────────────────────────────────────────────────────────────────
