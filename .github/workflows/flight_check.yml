@@ -2,7 +2,7 @@ name: Daily Flight Price Check
 
 on:
   schedule:
-    - cron: "0 5 * * *"   # 05:00 UTC = 06:00 CET / 07:00 CEST
+    - cron: "0 3 * * *"   # 05:00 UTC = 06:00 CET / 07:00 CEST
   workflow_dispatch:        # Allow manual trigger from GitHub UI
 
 jobs:
